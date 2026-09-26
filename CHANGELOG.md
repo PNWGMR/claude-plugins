@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 #### Fixed
 - `codex-review` extracts completed JSONL as UTF-8 and atomically replaces feedback only after validation, preserving a prior result when the stream is malformed or partial.
 - The review wrapper retains Codex and parser diagnostics with the log ID and does not start a fresh review after a failed resume produces a nonempty stream.
+- On extraction failure, the wrapper reports a thread ID already present in a valid start event without accepting incomplete feedback.
 
 ### code-review v3.10.1
 
