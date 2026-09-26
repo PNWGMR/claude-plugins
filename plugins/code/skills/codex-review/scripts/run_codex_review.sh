@@ -228,6 +228,9 @@ parse_feedback_text() {
   local json_file="$1"
   local parsed_session
   if ! parsed_session=$(python3 "$SCRIPT_DIR/parse_codex_json.py" "$json_file" "$FEEDBACK_FILE" 2>> "$ERROR_LOG"); then
+    if [[ -n "$parsed_session" ]]; then
+      effective_session_id="$parsed_session"
+    fi
     echo "Feedback extraction failed; details retained in $ERROR_LOG" >&2
     echo "CODEX_FAILED:feedback extraction failed; log=$LOG_FILE; diagnostics=$ERROR_LOG"
     echo "CODEX_SESSION:${effective_session_id:-none}"

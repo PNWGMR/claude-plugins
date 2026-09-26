@@ -113,7 +113,7 @@ def test_failed_extraction_keeps_prior_feedback_and_does_not_rerun(
     )
     assert completed.returncode == 0, completed.stderr
     assert "CODEX_FAILED:feedback extraction failed" in completed.stdout
-    assert "CODEX_SESSION:previous-session" in completed.stdout
+    assert "CODEX_SESSION:synthetic-session" in completed.stdout
     assert "LOG_ID:synthetic-review" in completed.stdout
     assert feedback.read_bytes() == b"prior usable verdict"
     assert calls.read_text(encoding="utf-8").splitlines() == ["call"]

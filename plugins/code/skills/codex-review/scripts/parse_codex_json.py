@@ -63,6 +63,23 @@ def extract(source: Path, feedback: Path) -> str:
     return thread_id
 
 
+def session_from_partial(source: Path) -> str:
+    """Recover an already-started session without accepting partial feedback."""
+    try:
+        with source.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    return ""
+                if isinstance(event, dict) and event.get("type") == "thread.started":
+                    thread_id = event.get("thread_id")
+                    return thread_id if isinstance(thread_id, str) else ""
+    except (OSError, UnicodeError):
+        pass
+    return ""
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print("usage: parse_codex_json.py JSONL FEEDBACK", file=sys.stderr)
@@ -71,6 +88,7 @@ def main() -> int:
     try:
         thread_id = extract(source, feedback)
     except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        sys.stdout.buffer.write(session_from_partial(source).encode("utf-8"))
         print(f"feedback extraction failed from {source}: {exc}", file=sys.stderr)
         return 2
     # Codex session IDs are ASCII. Avoid the host's stdout encoding for the payload.
