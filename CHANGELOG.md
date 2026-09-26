@@ -4,6 +4,12 @@ All notable changes to the claude-plugins project will be documented in this fil
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Entries are listed newest-first; each plugin section is treated as released when merged to `main`.
 
+### code v1.14.12
+
+#### Fixed
+- `codex-review` extracts completed JSONL as UTF-8 and atomically replaces feedback only after validation, preserving a prior result when the stream is malformed or partial.
+- The review wrapper retains Codex and parser diagnostics with the log ID and does not start a fresh review after a failed resume produces a nonempty stream.
+
 ### code-review v3.10.1
 
 #### Added
