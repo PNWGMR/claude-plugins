@@ -9,7 +9,7 @@
 #   debate-loop.sh "Build a REST API for user management" [options]
 #
 # Options:
-#   --max-rounds N        Maximum debate rounds (default: 15)
+#   --max-rounds N        Review budget, 1 to 15 (default: 2; >2 opts into deep review)
 #   --plan-file PATH      Output plan file path (default: ./debate-plan.md)
 #   --codex-model MODEL   Codex model to use (default: gpt-5.3-codex)
 #   -h, --help            Show this help
@@ -37,7 +37,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # Defaults
-MAX_ROUNDS=15
+MAX_ROUNDS=2
 PLAN_FILE=""
 CODEX_MODEL="gpt-5.3-codex"
 CLAUDE_MODEL="opus[1m]"
@@ -141,6 +141,9 @@ run_codex_review() {
     printf '%s' "$PROMPT" > "$request_file"
     review_args+=(--request-file "$request_file")
   fi
+  if [[ -f "$REVISIONS_FILE" ]]; then
+    review_args+=(--revisions-file "$REVISIONS_FILE")
+  fi
   if [[ -n "$CODEX_SESSION_ID" ]]; then
     review_args+=(--session-id "$CODEX_SESSION_ID")
   fi
@@ -198,7 +201,7 @@ USAGE:
   debate-loop.sh [options] "<prompt>"
 
 OPTIONS:
-  --max-rounds N        Maximum debate rounds (default: 15)
+  --max-rounds N        Review budget, 1 to 15 (default: 2; >2 opts into deep review)
   --plan-file PATH      Output plan file path (default: ./debate-plan.md)
   --codex-model MODEL   Codex model to use (default: gpt-5.3-codex)
   --model MODEL         Claude model to use (default: opus[1m])
@@ -209,12 +212,12 @@ OPTIONS:
 DESCRIPTION:
   1. Claude creates an implementation plan from your prompt
   2. Codex reviews the plan and provides feedback
-  3. Claude addresses the feedback and updates the plan
-  4. Repeat until Codex approves or max rounds reached
+  3. The coordinator corrects supported material findings within the agreed scope
+  4. Verify an actual material correction only; stop when approved or at the budget
 
 EXAMPLES:
   debate-loop.sh "Build a REST API for user management"
-  debate-loop.sh --plan-file auth-plan.md --max-rounds 10 "Refactor the auth system"
+  debate-loop.sh --plan-file auth-plan.md --max-rounds 15 "Deep review of the auth system"
   debate-loop.sh --codex-model gpt-5.3-codex "Add caching layer"
 EOF
 }
@@ -227,8 +230,8 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --max-rounds)
-      if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -eq 0 ]]; then
-        echo -e "${RED}Error: --max-rounds requires a positive integer${NC}" >&2
+      if ! [[ "${2:-}" =~ ^([1-9]|1[0-5])$ ]]; then
+        echo -e "${RED}Error: --max-rounds requires an integer from 1 to 15${NC}" >&2
         exit 1
       fi
       MAX_ROUNDS="$2"
@@ -340,6 +343,14 @@ PLAN_FILE_ABS="${PLAN_DIR}/$(basename "$PLAN_FILE")"
 
 STATE_FILE="${PLAN_FILE_ABS%.md}.state"
 FEEDBACK_FILE="${PLAN_FILE_ABS%.md}.feedback"
+REVISIONS_FILE="${PLAN_FILE_ABS%.md}.revisions"
+PROMPT_FILE="${PLAN_FILE_ABS%.md}.prompt"
+EXCLUSIONS_FILE="${PLAN_FILE_ABS%.md}.exclusions"
+if [[ ! -f "$PROMPT_FILE" ]]; then
+  printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
+fi
+ORIGINAL_REQUEST=$(cat "$PROMPT_FILE")
+EXCLUSIONS=$(cat "$EXCLUSIONS_FILE" 2>/dev/null || true)
 RESUMING=false
 CODEX_SESSION_ID=""
 PHASE=codex_review
@@ -453,8 +464,8 @@ if [[ "$PHASE" == "user_review" ]]; then
   echo ""
 
   while true; do
-    # Launch interactive Claude session with instruction to proxy through plan-agent
-    local_claude_args=(--model "$CLAUDE_MODEL" -r "$SESSION_ID" -p "The user would like to iterate on the plan interactively. Resume the code:plan-agent from your conversation history. For every message the user sends, pass it to the plan agent so it can respond and make edits to the plan at ${PLAN_FILE_ABS}. Act as a transparent proxy -- do not answer plan questions yourself, always delegate to the plan agent." --permission-mode acceptEdits --allowed-tools "Read,Write,Glob,Grep,Agent(code:plan-agent)")
+    # The coordinator can make bounded edits while the user reviews the plan.
+    local_claude_args=(--model "$CLAUDE_MODEL" -r "$SESSION_ID" -p "Review the plan at ${PLAN_FILE_ABS} with the user. Apply bounded requested corrections directly. Preserve the original request and confirmed exclusions; ask the user about actual scope changes. Original request: ${ORIGINAL_REQUEST}. Confirmed exclusions: ${EXCLUSIONS}." --permission-mode acceptEdits --allowed-tools "Read,Write,Edit,Glob,Grep,Agent(code:plan-agent)")
     if [[ ${#ADD_DIR_ARGS[@]} -gt 0 ]]; then
       local_claude_args+=("${ADD_DIR_ARGS[@]}")
     fi
@@ -486,6 +497,12 @@ fi
 
 while [[ $round -le $MAX_ROUNDS ]]; do
 
+  # A completed review awaiting correction has already consumed this round.
+  if [[ "$PHASE" == "claude_revision" && $round -ge $MAX_ROUNDS ]]; then
+    echo -e "${YELLOW}Max rounds (${MAX_ROUNDS}) already reached without approval${NC}"
+    break
+  fi
+
   # ── Codex review (skip if resuming mid-round into Claude's turn) ──────────
 
   if [[ "$PHASE" != "claude_revision" ]]; then
@@ -506,10 +523,9 @@ while [[ $round -le $MAX_ROUNDS ]]; do
     fi
 
     if [[ "$CODEX_VERDICT" == "EMPTY" ]]; then
-      echo -e "${YELLOW}Warning: Codex returned empty response, skipping round${NC}"
+      echo -e "${YELLOW}Codex returned no usable review; stopping without approval${NC}"
       echo ""
-      round=$((round + 1))
-      continue
+      break
     fi
 
     # Read and display feedback
@@ -531,6 +547,10 @@ while [[ $round -le $MAX_ROUNDS ]]; do
       break
     fi
 
+    # Persist the completed review before stopping at the budget or correcting.
+    PHASE=claude_revision
+    save_state
+
     # If this was the last round, don't bother with another Claude revision
     if [[ $round -ge $MAX_ROUNDS ]]; then
       echo -e "${YELLOW}================================================================${NC}"
@@ -539,9 +559,6 @@ while [[ $round -le $MAX_ROUNDS ]]; do
       echo ""
       break
     fi
-
-    PHASE=claude_revision
-    save_state
 
   else
     # Resuming mid-round: Codex already reviewed, load saved feedback
@@ -559,17 +576,28 @@ while [[ $round -le $MAX_ROUNDS ]]; do
   echo -e "${BLUE}--- Round ${round}/${MAX_ROUNDS}: Claude addressing feedback ---${NC}"
   echo ""
 
-  # Resume the Claude session so it retains full context of previous rounds.
+  # A further review is justified by a material correction, never a quiet round.
+  PLAN_BEFORE=$(mktemp)
+  TMPFILES+=("$PLAN_BEFORE")
+  cp "$PLAN_FILE_ABS" "$PLAN_BEFORE"
+  printf 'MATERIAL_CORRECTION: no\nNo correction recorded for this review.\n' > "$REVISIONS_FILE"
+  REVISION_PROMPT="Act as the accountable coordinator for the plan at ${PLAN_FILE_ABS}.
+Read the feedback at ${FEEDBACK_FILE} and verify its claims against the codebase.
+Apply bounded direct corrections only for supported material findings needed to
+deliver the agreed request. Optional advice does not require another review.
+Preserve the original scope and user-confirmed exclusions.
+Original request: ${ORIGINAL_REQUEST}
+Confirmed exclusions: ${EXCLUSIONS}
+Write a summary to ${REVISIONS_FILE}. Its first line must be exactly
+MATERIAL_CORRECTION: yes only when an actual material correction was applied,
+or MATERIAL_CORRECTION: no otherwise. Describe the findings and changed sections.
+Unresolved material findings remain unapproved; do not call a disposition approval."
   set +e
   run_claude \
-    -p "Resume the plan agent from your conversation history and pass it this task:
-
-'Revise the plan at ${PLAN_FILE_ABS} based on feedback at ${FEEDBACK_FILE}. Verify each finding against the codebase before acting on it. Do not dismiss a finding solely because it looks broader than the request or involves refactoring -- distinguish between required work, justified enabling refactor, and true optional scope creep. Reject only findings that do not hold up or are genuinely optional beyond the minimum needed to deliver the request safely. Write the updated plan back to ${PLAN_FILE_ABS}.'
-
-Do not spawn a new plan agent -- resume the existing session." \
+    -p "$REVISION_PROMPT" \
     -r "$SESSION_ID" \
     --permission-mode acceptEdits \
-    --allowed-tools "Read,Write,Glob,Grep,Agent(code:plan-agent)"
+    --allowed-tools "Read,Write,Edit,Glob,Grep"
   RESUME_EXIT=$?
   set -e
 
@@ -579,13 +607,9 @@ Do not spawn a new plan agent -- resume the existing session." \
       echo -e "${YELLOW}Session resume failed, falling back to fresh session${NC}"
       set +e
       run_claude \
-        -p "Use the Agent tool to invoke the code:plan-agent with the following task:
-
-'Revise the plan at ${PLAN_FILE_ABS} based on feedback at ${FEEDBACK_FILE}. Verify each finding against the codebase before acting on it. Do not dismiss a finding solely because it looks broader than the request or involves refactoring -- distinguish between required work, justified enabling refactor, and true optional scope creep. Reject only findings that do not hold up or are genuinely optional beyond the minimum needed to deliver the request safely. Write the updated plan back to ${PLAN_FILE_ABS}.
-
-The original request was: ${PROMPT}'" \
+        -p "$REVISION_PROMPT" \
         --permission-mode acceptEdits \
-        --allowed-tools "Read,Write,Glob,Grep,Agent(code:plan-agent)"
+        --allowed-tools "Read,Write,Edit,Glob,Grep"
       FALLBACK_EXIT=$?
       set -e
 
@@ -608,19 +632,24 @@ The original request was: ${PROMPT}'" \
   echo ""
   PLAN_SIZE=$(wc -c < "$PLAN_FILE_ABS" | tr -d ' ')
   echo -e "${GREEN}Plan updated (${PLAN_SIZE} bytes)${NC}"
+  if ! grep -qx 'MATERIAL_CORRECTION: yes' <(head -n 1 "$REVISIONS_FILE") ||
+      cmp -s "$PLAN_BEFORE" "$PLAN_FILE_ABS"; then
+    echo -e "${YELLOW}No actual material correction to verify; stopping without approval${NC}"
+    break
+  fi
   echo ""
 
+  round=$((round + 1))
   PHASE=codex_review
   save_state
-  round=$((round + 1))
 done
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
-rm -f "$STATE_FILE" "$FEEDBACK_FILE" 2>/dev/null || true
-
 if [[ "$approved" == "true" ]]; then
+  rm -f "$STATE_FILE" "$FEEDBACK_FILE" "$REVISIONS_FILE" "$PROMPT_FILE" "$EXCLUSIONS_FILE"
   echo -e "Plan file: ${GREEN}${PLAN_FILE_ABS}${NC}"
 else
+  echo -e "${YELLOW}Unresolved feedback, original scope and state retained for an explicit next step.${NC}"
   echo -e "Plan file (unapproved): ${YELLOW}${PLAN_FILE_ABS}${NC}"
 fi

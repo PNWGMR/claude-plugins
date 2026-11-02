@@ -344,10 +344,11 @@ if [[ -z "$feedback_content" ]]; then
   exit 0
 fi
 
-# Extract verdict from feedback text
-if echo "$feedback_content" | grep -q "VERDICT: APPROVED"; then
+# Only the required terminal verdict is authoritative; quoted examples are not.
+terminal_verdict=$(printf '%s\n' "$feedback_content" | sed '/^[[:space:]]*$/d' | tail -n 1)
+if [[ "$terminal_verdict" == "VERDICT: APPROVED" ]]; then
   echo "VERDICT:APPROVED"
-elif echo "$feedback_content" | grep -q "VERDICT: NEEDS_CHANGES"; then
+elif [[ "$terminal_verdict" == "VERDICT: NEEDS_CHANGES" ]]; then
   echo "VERDICT:NEEDS_CHANGES"
 elif echo "$feedback_content" | grep -q "^### Finding"; then
   # Has findings but no explicit verdict -- treat as needs changes

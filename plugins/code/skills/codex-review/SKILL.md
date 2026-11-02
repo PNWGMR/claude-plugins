@@ -65,7 +65,7 @@ CODEX_SESSION:abc-123-def
 LOG_ID:550e8400-e29b-41d4-a716-446655440000
 ```
 
-**Action:** Read the feedback file for full details. Pass to plan-agent for revision.
+**Action:** Read the feedback and let the accountable coordinator verify each material finding against the codebase. Make bounded corrections directly, or delegate a substantial rewrite. Use another pass only for an actual material correction within the caller's budget; optional advice or an unchanged plan does not require a quiet round. Retain unresolved findings without claiming approval when the budget is exhausted.
 
 ### Codex Failed
 
