@@ -142,14 +142,14 @@ Checks for `.closedloop-ai/closedloop-loop.local.md`, reads the current iteratio
 
 ### `/code:plan-with-codex`
 
-**Description:** Iterative plan refinement debate between Claude and Codex.
+**Description:** Bounded plan review between Claude and Codex, with explicitly selected deep debate.
 
 **Usage:**
 ```
 /code:plan-with-codex [--max-rounds N] [--plan-file PATH] [--codex-model MODEL] <prompt>
 ```
 
-- `--max-rounds N`: Maximum debate rounds (default: 15)
+- `--max-rounds N`: Total review-pass budget, 1–15 (default: 2). Above 2 explicitly selects deep debate; a second pass is used only to verify an actual material correction.
 - `--plan-file PATH`: Output plan file (default: `./debate-plan.md`)
 - `--codex-model MODEL`: Codex model for reviews (default: `gpt-5.3-codex`)
 - `<prompt>`: Description of what to plan (required; can also be read from a `{stem}.prompt` sidecar file)
@@ -157,10 +157,10 @@ Checks for `.closedloop-ai/closedloop-loop.local.md`, reads the current iteratio
 **What it does:**
 
 1. Launches `code:plan-agent` to create an initial plan from the prompt, writing it to `--plan-file`
-2. Presents open questions to the user and resolves them via the plan-agent before proceeding
+2. Presents open questions and scope/exclusion decisions to the user, then applies bounded answers directly or delegates a substantial rewrite
 3. Presents the plan for user review and applies any requested changes
-4. Enters a fully automated debate loop: Codex reviews the plan via the `code:codex-review` skill, Claude revises per feedback, and the loop continues until `VERDICT:APPROVED` or max rounds are reached
-5. Reports the final outcome and cleans up sidecar state files
+4. Runs one substantive Codex review via `code:codex-review`; the coordinator applies supported material corrections within the agreed scope, and only an actual material correction justifies another verification pass within the budget
+5. Reports approval or unresolved findings honestly; approval cleans up generated sidecars, while unapproved or aborted work retains feedback, state, original request and confirmed exclusions
 
 Supports resuming mid-session via a `{stem}.state` sidecar file that tracks the current round and Codex session ID.
 
@@ -243,7 +243,7 @@ Extracts actionable plan amendments from unstructured input (meeting notes, Slac
 Provides language-specific review patterns and edge case guidance for the `code-reviewer` agent.
 
 **`plan-agent`** (model: opus)
-Software architect agent for creating and revising implementation plans. Explores the codebase, designs a plan grounded in existing patterns, and writes it directly to a specified file on disk. Used by the `plan-with-codex` command; resumed across debate rounds via `SendMessage` to apply Codex feedback without losing architectural context.
+Software architect agent for creating and revising implementation plans. Explores the codebase, designs a plan grounded in existing patterns, and writes it directly to a specified file on disk. Used initially by `plan-with-codex` and reused via `SendMessage` when a substantial rewrite is delegated; the accountable coordinator can apply bounded corrections directly.
 
 **`design-unit-analyst`** (model: sonnet)
 Per-design-unit state-vs-spec analyst for the `design-inventory` pipeline. Analyzes one design unit (screen, region, component, or flow) from a Claude Design export against the current web-ui codebase, classifies divergences (visual, behavioral, component reuse, backend gap, token drift), and writes a schema-validated `findings.json`. Read-only with respect to both codebases; never implements changes.
@@ -304,7 +304,7 @@ Single source of truth for the two reusable orchestration procedures shared by a
 
 ### `codex-review`
 
-Runs Codex to review a plan file and returns structured feedback with a verdict. Called once per debate round by the `plan-with-codex` command via `debate-loop.sh`. Supports session resume across rounds using a Codex thread ID. Returns `VERDICT:APPROVED` or `VERDICT:NEEDS_CHANGES` plus a `CODEX_SESSION` token. Emits `CODEX_FAILED` or `CODEX_EMPTY` tokens on error so the orchestrator can ask the user to retry or abort.
+Runs Codex to review a plan file and returns structured feedback with a verdict. Called for each justified pass by `plan-with-codex` or `debate-loop.sh`, within the caller's selected budget. Supports session resume across passes using a Codex thread ID. Returns `VERDICT:APPROVED` or `VERDICT:NEEDS_CHANGES` plus a `CODEX_SESSION` token; only the terminal verdict controls, so a quoted approval is not approval. Emits `CODEX_FAILED` or `CODEX_EMPTY` on unusable output; these do not authorize an automatic second pass.
 
 ### `decision-table`
 
@@ -434,7 +434,7 @@ Installs required Python dependencies for the plugin's tools.
 
 ### `debate-loop.sh`
 
-Shell harness for the Codex debate loop used by the `plan-with-codex` command. Drives the round-by-round interaction between the `code:plan-agent` and Codex, maintaining state in sidecar files alongside the plan file.
+Shell harness for bounded plan review between the accountable coordinator and Codex. The default budget is two passes: one substantive review and optional verification of an actual material correction. Explicit `--max-rounds` values above two select deep debate up to fifteen passes. It preserves state and unresolved feedback alongside the plan rather than treating budget exhaustion, empty output or an unchanged plan as approval.
 
 ### `stamp_critic_cache.sh`
 

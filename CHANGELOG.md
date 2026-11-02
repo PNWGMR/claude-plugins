@@ -4,6 +4,19 @@ All notable changes to the claude-plugins project will be documented in this fil
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Entries are listed newest-first; each plugin section is treated as released when merged to `main`.
 
+### code v1.15.0
+
+#### Changed
+- The plan-with-codex command and debate-loop CLI default to one substantive review with an optional material-correction verification pass, within a two-pass budget. Explicit --max-rounds values above two select deep review up to fifteen passes.
+- The coordinator can apply bounded plan corrections directly while preserving the original request and confirmed exclusions. Further reviews require a material-correction summary and changed plan bytes; empty output, optional advice and unchanged plans stop without another automatic pass.
+- Unapproved stops retain feedback, original-scope sidecars and state for an explicit next step.
+
+#### Fixed
+- The shared Codex review runner reads only the final nonempty verdict line, so quoted approval text cannot override a terminal changes-requested verdict.
+
+#### Added
+- Inert CLI regression cases cover the default budget, optional correction verification, explicit deep review, empty/advisory/no-op stops, unresolved evidence retention and terminal verdict handling.
+
 ### code-review v3.10.1
 
 #### Added

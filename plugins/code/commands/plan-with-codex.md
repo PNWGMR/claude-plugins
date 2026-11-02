@@ -1,7 +1,7 @@
 ---
-description: "Iterative plan refinement debate between Claude and Codex"
+description: "Bounded plan review with optional explicit deep debate between Claude and Codex"
 argument-hint: --max-rounds N --plan-file PATH --codex-model MODEL <prompt>
-allowed-tools: Bash, Read, Write, Glob, Grep, TodoWrite, Task, AskUserQuestion, SendMessage
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, TodoWrite, Task, AskUserQuestion, SendMessage
 skills: code:codex-review
 effort: max
 model: opus
@@ -9,12 +9,12 @@ model: opus
 
 # Debate Loop -- Claude + Codex Plan Refinement
 
-You orchestrate iterative plan refinement: Claude (via `code:plan-agent`) creates a plan, Codex reviews it, you coordinate revisions until Codex approves or max rounds are reached.
+Create a plan, obtain one substantive Codex review, and correct supported material findings within the agreed scope. A second pass verifies an actual material correction only. The default budget is two total passes, not a required second or quiet round; an explicit `--max-rounds` above two selects deep debate, up to fifteen passes.
 
 <constraints>
-1. **NEVER edit the plan file directly.** All plan creation/modification goes through the plan-agent. If you're about to use Edit or Write on the plan file, STOP and delegate to the plan-agent.
-2. **Continue the plan-agent via SendMessage across rounds.** Capture the `agent_id` returned by the first `Agent(...)` call and reuse it for every subsequent plan-agent interaction via `SendMessage(to="<agent_id>", ...)`. Completed subagents auto-resume from transcript in the background, preserving full prior context. Only launch a fresh `Agent(...)` when no in-memory `agent_id` is available (cross-session resume after a previous Claude Code session ended) or when a SendMessage call actually errors -- fresh launches must use a self-contained prompt.
-3. **The Codex/Claude debate loop is fully automated.** After the user approves in Step 1.5, do NOT ask for confirmation between rounds -- proceed directly.
+1. **One accountable coordinator owns the plan.** Make bounded corrections directly. Delegate a substantial rewrite when useful; preserve the original request, confirmed exclusions and the user's scope decisions either way.
+2. **Reuse a delegated plan-agent.** When delegating, capture its `agent_id` and continue it via `SendMessage(to="<agent_id>", ...)`. Launch fresh only when no agent is available or continuation errors, carrying the original request and confirmed exclusions.
+3. **Stay within the selected budget.** After user confirmation in Step 1.5, verify actual material corrections without another routine permission request. Optional advice, an unchanged plan or generic uncertainty does not justify another pass. Unresolved material findings remain unapproved at the budget.
 </constraints>
 
 <templates>
@@ -72,7 +72,7 @@ Arguments: $ARGUMENTS
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--max-rounds N` | 15 | Maximum debate rounds |
+| `--max-rounds N` | 2 | Total pass budget, integer 1–15; above 2 explicitly selects deep debate |
 | `--plan-file PATH` | `./debate-plan.md` | Output plan file (resolve to absolute path) |
 | `--codex-model MODEL` | `gpt-5.3-codex` | Codex model for reviews |
 | Remaining text | (required for fresh start) | The prompt. Optional when resuming. |
@@ -85,6 +85,8 @@ Derive sidecar paths from the plan file stem (e.g., for `debate-plan.md`):
 - `{stem}.exclusions` -- user-confirmed deferral exclusions (written by Step 1.5)
 
 **Prompt resolution**: CLI argument > `{stem}.prompt` sidecar. Abort only when neither exists.
+
+Validate the budget before starting. Resuming does not reset the completed-pass count or silently restore the old fifteen-pass default.
 
 Initialize TodoWrite:
 ```
@@ -179,7 +181,7 @@ Read the plan. Check for open questions (lines matching `Q-` or `- [ ] Q-`).
 
 (Omit the "Open Questions" heading if there are none. Omit the "Deferred Items" heading if there are none.)
 
-**Build the plan-agent prompt** by including the full text of each deferred item and the user's decision (not just "2a"). Example format:
+Apply the answers directly, or delegate with the full text of each deferred item and the user's decision (not just "2a"). Example update instructions:
 
 ```
 The user answered the open questions and deferral decisions as follows:
@@ -198,13 +200,13 @@ Update the plan at {plan-file-abs}:
 Write back to {plan-file-abs}.
 ```
 
-Continue the plan-agent via SendMessage (using the stored `agent_id`):
+If delegating, continue the plan-agent via SendMessage (using the stored `agent_id`):
 - summary: "Apply answers and deferrals"
 - message: (the text built above)
 
-Wait for the `<task-notification>` before re-reading the plan to verify the update.
+Wait for any delegated update before re-reading the plan to verify it.
 
-**After the plan-agent returns**, update the exclusions sidecar (do NOT modify `{stem}.prompt`). This is a full rewrite each pass -- not an append -- so reversed decisions are reflected:
+After applying the answers, update the exclusions sidecar (do NOT modify `{stem}.prompt`). This is a full rewrite each pass -- not an append -- so reversed decisions are reflected:
 
 - If any deferrals were confirmed as EXCLUDE, write them:
   ```
@@ -222,7 +224,7 @@ Re-read and repeat until no open questions or deferred items remain.
 
 > Plan created at `{plan-file-abs}`. Review it and let me know when you're ready to start the Codex debate, or share any changes you'd like made first.
 
-**If user requests changes:** Continue plan-agent via SendMessage with their feedback as the `message`. Wait for the `<task-notification>`, then re-read the plan. Loop back until the user confirms.
+**If user requests changes:** Make bounded corrections directly or delegate a substantial rewrite. Re-read the updated plan and preserve their scope/exclusion decisions. Continue to the debate only after user confirmation.
 
 **When user confirms** ("start", "go", "looks good", "proceed"):
 
@@ -230,7 +232,7 @@ Write state: `ROUND=1, PHASE=codex_review`. Proceed to Step 2.
 
 ## Step 2: Debate Loop
 
-Repeat for round 1 to max-rounds:
+Run the first substantive review. Continue only to verify an actual material correction, within the total budget. A first-pass approval ends immediately. Further substantive debate beyond two passes requires an explicit deep budget; it still does not justify quiet rounds or optional acceptance growth.
 
 ### 2a. Codex Review
 
@@ -269,11 +271,11 @@ Read the feedback file and display full Codex feedback to the user.
 
 Update TodoWrite: "Round {N}/{max}: Revising plan..."
 
-**Continue the plan-agent via SendMessage** (using the stored `agent_id`):
-- summary: "Revise plan per Codex feedback"
-- message: "Revise the plan at {plan-file-abs} based on feedback at {feedback-file-abs}. Verify each finding against the codebase before acting on it. Do not dismiss a finding solely because it looks broader than the request or involves refactoring -- distinguish between required work, justified enabling refactor, and true optional scope creep. Reject only findings that do not hold up or are genuinely optional beyond the minimum needed to deliver the request safely. After updating the plan, write a revision summary to {revisions-file-abs}."
+Read the original request, confirmed exclusions, current plan and feedback. Verify each finding against the codebase; distinguish required work and justified enabling refactors from optional advice. Apply bounded direct corrections for supported material findings, or delegate a substantial rewrite with that same scope.
 
-Wait for the `<task-notification>`, then verify the plan was updated. Write state: `ROUND={N+1}, PHASE=codex_review`, preserve current `CODEX_SESSION_ID` and `LOG_ID`. Continue to next round.
+Record the plan's bytes before correction. Write a summary to `{revisions-file-abs}` with first line `MATERIAL_CORRECTION: yes` only for an actual material correction, or `MATERIAL_CORRECTION: no` otherwise; describe the affected finding and sections.
+
+Only a material correction with changed plan bytes justifies the next verification pass. Otherwise stop with an unapproved disposition and the supported unresolved findings; an author rejecting advice is not a Codex approval. Carry accepted unaffected evidence forward. Write state `ROUND={N+1}, PHASE=codex_review` only when continuing, preserving session/log IDs.
 
 ## Step 3: Final Report
 
@@ -282,12 +284,12 @@ Report outcome:
 - Max rounds: "Plan not approved after {max} rounds. File: {plan-file-abs}"
 - Aborted: "Debate aborted. Partial plan at: {plan-file-abs}"
 
-Clean up ALL sidecar files (prompt sidecar deleted intentionally to prevent stale intent on future runs):
+On approval, clean up the generated sidecars (the prompt is removed to prevent stale intent on a future fresh run):
 ```bash
 rm -f {state_file} {feedback_file} {revisions_file} {prompt_file} {exclusions_file}
 ```
 
-Update TodoWrite: mark all remaining items completed.
+When unapproved or aborted, retain the feedback, state, original prompt and exclusions for an explicit next step. Report what remains unresolved; budget exhaustion or empty output is never approval. Mark the review attempt/report complete without marking unresolved plan work done.
 
 Announce: "Codex review log: `~/.closedloop-ai/plan-with-codex/{log_id}.jsonl`"
 
