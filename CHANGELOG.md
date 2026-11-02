@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Unapproved stops retain feedback, original-scope sidecars and state for an explicit next step.
 
 #### Fixed
+- Retained state records completed reviews before a budget stop, so restarting the same command cannot repeat the last pass or exceed the default budget. An explicitly larger deep budget continues only after a material correction.
 - The shared Codex review runner reads only the final nonempty verdict line, so quoted approval text cannot override a terminal changes-requested verdict.
 
 #### Added

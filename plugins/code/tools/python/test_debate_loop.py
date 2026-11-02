@@ -82,6 +82,18 @@ class DebateBudgetTests(unittest.TestCase):
         )
         for executable in (codex, claude):
             executable.chmod(0o755)
+        return self.run_existing(root, correction=correction, extra=extra)
+
+    def run_existing(
+        self,
+        root: Path,
+        *,
+        correction: str = "yes",
+        extra: tuple[str, ...] = (),
+    ) -> tuple[subprocess.CompletedProcess[str], int, Path]:
+        bin_dir = root / "bin"
+        plan = root / "plan.md"
+        claude = bin_dir / "claude"
         env = os.environ.copy()
         env.update(
             PATH=str(bin_dir) + os.pathsep + env["PATH"],
@@ -136,6 +148,35 @@ class DebateBudgetTests(unittest.TestCase):
         self.assertIn("Material gap", (root / "plan.feedback").read_text())
         self.assertEqual((root / "plan.prompt").read_text(), "Original request")
         self.assertEqual((root / "plan.exclusions").read_text(), "Excluded future work")
+
+    def test_exhausted_default_budget_stays_exhausted_on_restart(self) -> None:
+        _, calls, root = self.run_debate(
+            ["### Finding 1: Material gap\nVERDICT: NEEDS_CHANGES"] * 2
+            + ["VERDICT: APPROVED"]
+        )
+        self.assertEqual(calls, 2)
+        feedback = (root / "plan.feedback").read_text()
+        self.assertIn("ROUND=2", (root / "plan.state").read_text())
+        self.assertIn("PHASE=claude_revision", (root / "plan.state").read_text())
+        result, calls, _ = self.run_existing(root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, 2)
+        self.assertNotIn("Plan approved by Codex", result.stdout)
+        self.assertEqual((root / "plan.feedback").read_text(), feedback)
+        self.assertEqual((root / "plan.prompt").read_text(), "Original request")
+        self.assertEqual((root / "plan.exclusions").read_text(), "Excluded future work")
+
+    def test_explicit_larger_budget_resumes_with_correction_then_next_pass(self) -> None:
+        _, calls, root = self.run_debate(
+            ["### Finding 1: Material gap\nVERDICT: NEEDS_CHANGES"] * 2
+            + ["VERDICT: APPROVED"]
+        )
+        self.assertEqual(calls, 2)
+        result, calls, _ = self.run_existing(root, extra=("--max-rounds", "15"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, 3)
+        self.assertIn("Plan approved by Codex after 3 round", result.stdout)
+        self.assertEqual((root / "plan.md").read_text().count("Material correction"), 2)
 
     def test_advice_or_unchanged_plan_does_not_force_a_second_pass(self) -> None:
         for correction in ("no", "unchanged", "missing"):

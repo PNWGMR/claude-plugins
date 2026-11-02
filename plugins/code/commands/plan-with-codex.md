@@ -113,6 +113,8 @@ Check if `{stem}.state` exists (`test -f`). If yes, Read the state file and extr
 
 If preconditions fail: delete stale state file and fall through to "If NO state file exists" below. Fresh start still possible if prompt is available (CLI argument or sidecar). Abort only when neither exists.
 
+If resuming `claude_revision`, ROUND counts a completed review. When ROUND is already at the selected budget, stop at Step 3 without another review or correction. An explicitly larger deep budget can continue with the material correction and then review ROUND+1; resuming never repeats a completed pass.
+
 If preconditions pass: check whether `{stem}.exclusions` exists. If ROUND > 1 and the exclusions file is missing, warn the user via AskUserQuestion: "Resuming at round {N}, but the exclusions file (`{stem}.exclusions`) is missing. Any previously confirmed deferral decisions may be lost if the plan-agent is re-launched fresh. Continue anyway, or abort?" On abort, go to Step 3. On continue, proceed normally.
 
 Announce "Resuming debate at round {N}, phase: {PHASE}" and jump to:
@@ -264,7 +266,7 @@ Read the feedback file and display full Codex feedback to the user.
 ### 2d. Check Verdict
 
 - **APPROVED**: "Plan approved by Codex after {N} round(s)." Go to Step 3.
-- **Last round, not approved**: "Max rounds ({max}) reached without approval." Go to Step 3.
+- **Last round, not approved**: Write state `ROUND={N}, PHASE=claude_revision` to record that this review was consumed. Report "Max rounds ({max}) reached without approval." Go to Step 3.
 - **NEEDS_CHANGES**: Write state (`PHASE=claude_revision`, preserve current `CODEX_SESSION_ID` and `LOG_ID`). Continue to 2e.
 
 ### 2e. Claude Revision

@@ -497,6 +497,12 @@ fi
 
 while [[ $round -le $MAX_ROUNDS ]]; do
 
+  # A completed review awaiting correction has already consumed this round.
+  if [[ "$PHASE" == "claude_revision" && $round -ge $MAX_ROUNDS ]]; then
+    echo -e "${YELLOW}Max rounds (${MAX_ROUNDS}) already reached without approval${NC}"
+    break
+  fi
+
   # ── Codex review (skip if resuming mid-round into Claude's turn) ──────────
 
   if [[ "$PHASE" != "claude_revision" ]]; then
@@ -541,6 +547,10 @@ while [[ $round -le $MAX_ROUNDS ]]; do
       break
     fi
 
+    # Persist the completed review before stopping at the budget or correcting.
+    PHASE=claude_revision
+    save_state
+
     # If this was the last round, don't bother with another Claude revision
     if [[ $round -ge $MAX_ROUNDS ]]; then
       echo -e "${YELLOW}================================================================${NC}"
@@ -549,9 +559,6 @@ while [[ $round -le $MAX_ROUNDS ]]; do
       echo ""
       break
     fi
-
-    PHASE=claude_revision
-    save_state
 
   else
     # Resuming mid-round: Codex already reviewed, load saved feedback
